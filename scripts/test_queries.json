@@ -1,0 +1,34 @@
+[
+  {
+    "question": "员工请假需要提前多久申请？",
+    "expected": ["请假", "提前"]
+  },
+  {
+    "question": "报销差旅费的流程是什么？",
+    "expected": ["报销", "差旅"]
+  },
+  {
+    "question": "公司对加班有什么规定？",
+    "expected": ["加班"]
+  },
+  {
+    "question": "新员工入职需要准备什么材料？",
+    "expected": ["入职", "材料"]
+  },
+  {
+    "question": "加班之后公司怎么补偿？",
+    "expected": ["调休", "加班费"]
+  },
+  {
+    "question": "知识库问答系统支持哪些文档格式？",
+    "expected": ["Markdown", "txt"]
+  },
+  {
+    "question": "RAG是什么？",
+    "expected": ["RAG", "检索"]
+  },
+  {
+    "question": "混合检索用了什么技术？",
+    "expected": ["BM25", "向量"]
+  }
+]

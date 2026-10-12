@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>河小工 · RAG 知识库问答</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #f5f7fa; --card: #ffffff; --border: #e4e8ef;
+    --primary: #2563eb; --text: #1f2937; --muted: #6b7280;
+    --user-bubble: #2563eb; --ai-bubble: #ffffff;
+  }
+  body { font-family: "Microsoft YaHei", system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 16px; }
+  header .meta { font-size: 12px; color: var(--muted); }
+  #messages { flex: 1; overflow-y: auto; padding: 20px; max-width: 860px; width: 100%; margin: 0 auto; }
+  .msg { display: flex; flex-wrap: wrap; margin-bottom: 16px; align-items: flex-start; gap: 10px; }
+  .msg.user { justify-content: flex-end; }
+  .avatar { width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .av-ai { background: #2563eb; }
+  .av-user { background: #64748b; }
+  .avatar svg { width: 22px; height: 22px; }
+  .bubble { max-width: 78%; padding: 10px 14px; border-radius: 12px; line-height: 1.6; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+  .msg.user .bubble { background: var(--user-bubble); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.ai .bubble { background: var(--ai-bubble); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .msg .bubble.empty { color: var(--muted); }
+  .meta-panel { margin-top: 8px; font-size: 12px; color: var(--muted); flex-basis: 100%; }
+  .meta-panel summary { cursor: pointer; user-select: none; padding: 2px 0; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; margin-right: 6px; }
+  .badge.knowledge { background: #dbeafe; color: #1d4ed8; }
+  .badge.chat { background: #dcfce7; color: #15803d; }
+  .badge.reject { background: #fee2e2; color: #b91c1c; }
+  .steps { border-left: 2px solid var(--primary); padding-left: 10px; margin-top: 6px; }
+  .steps div { margin: 3px 0; }
+  .citations { margin-top: 6px; }
+  .citations .cite { background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-top: 4px; font-size: 12px; }
+  .citations .cite .src { color: var(--primary); font-weight: 600; }
+  .conf-bar { display: inline-block; width: 60px; height: 6px; background: #e5e7eb; border-radius: 3px; vertical-align: middle; margin-left: 4px; overflow: hidden; }
+  .conf-bar i { display: block; height: 100%; background: var(--primary); }
+  form { background: var(--card); border-top: 1px solid var(--border); padding: 12px 20px; }
+  .input-row { max-width: 860px; margin: 0 auto; display: flex; gap: 10px; }
+  input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; font-size: 14px; outline: none; }
+  input:focus { border-color: var(--primary); }
+  button { padding: 10px 22px; border: none; border-radius: 10px; background: var(--primary); color: #fff; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .typing::after { content: "▋"; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 12px; margin: 6px 0; }
+  .cite-ref { color: var(--primary); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>河小工 · RAG 知识库问答（Agent 全栈版）</h1>
+  <div class="meta">模型：<span id="model-label">加载中…</span> · 知识片段：<span id="kb-label">-</span></div>
+</header>
+
+<div id="messages"></div>
+
+<form id="chat-form">
+  <div class="input-row">
+    <input id="question" type="text" placeholder="输入你的问题，例如：请假流程是什么？" autocomplete="off" autofocus>
+    <button id="send-btn" type="submit">发送</button>
+  </div>
+</form>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let sessionId = null;
+
+// ---------- 极简 Markdown 渲染 ----------
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function renderMarkdown(text) {
+  let html = escapeHtml(text);
+  html = html.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\[来源(\d+)\]/g, '<span class="cite-ref">[来源$1]</span>');
+  // 代码块
+  html = html.replace(/```([\s\S]*?)```/g, (m, code) => "<pre>" + code.trim() + "</pre>");
+  return html;
+}
+
+// ---------- 消息渲染 ----------
+function addMessage(role, content, meta) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  if (content) bubble.innerHTML = renderMarkdown(content);
+  else { bubble.classList.add("empty"); bubble.textContent = "思考中…"; bubble.classList.add("typing"); }
+  const avatar = document.createElement("div");
+  avatar.className = "avatar " + (role === "ai" ? "av-ai" : "av-user");
+  avatar.innerHTML = role === "ai"
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5.2" y="7.8" width="13.6" height="10.4" rx="3.2"/><line x1="12" y1="4.6" x2="12" y2="7.8"/><circle cx="12" cy="3.6" r="1.05" fill="#ffffff" stroke="none"/><circle cx="9.4" cy="13" r="1.05" fill="#ffffff" stroke="none"/><circle cx="14.6" cy="13" r="1.05" fill="#ffffff" stroke="none"/><line x1="3.4" y1="11.6" x2="5.2" y2="11.6"/><line x1="18.8" y1="11.6" x2="20.6" y2="11.6"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.4"/><path d="M5.2 19.6c0-3.6 3.05-6.2 6.8-6.2s6.8 2.6 6.8 6.2"/></svg>';
+  if (role === "ai") wrap.appendChild(avatar);
+  wrap.appendChild(bubble);
+  if (role === "user") wrap.appendChild(avatar);
+
+  if (role === "ai" && meta) {
+    const panel = document.createElement("div");
+    panel.className = "meta-panel";
+    let badges = "";
+    if (meta.intent) badges += `<span class="badge ${meta.intent}">${meta.intent === "knowledge" ? "知识问答" : meta.intent === "chat" ? "闲聊" : "拒答"}</span>`;
+    if (meta.confidence > 0) badges += `相关度 <span class="conf-bar"><i style="width:${Math.min(100, meta.confidence * 100)}%"></i></span>`;
+    let html = badges;
+    if (meta.steps && meta.steps.length) {
+      html += `<details><summary>Agent 决策路径（${meta.steps.length} 步）</summary><div class="steps">`;
+      meta.steps.forEach(s => { html += `<div>➤ ${s.step}：${s.detail}</div>`; });
+      html += `</div></details>`;
+    }
+    if (meta.citations && meta.citations.length) {
+      html += `<details><summary>引用来源（${meta.citations.length}）</summary><div class="citations">`;
+      meta.citations.forEach(c => {
+        html += `<div class="cite"><span class="src">${escapeHtml(c.source)}</span><div>${escapeHtml((c.text || "").slice(0, 160))}${(c.text || "").length > 160 ? "…" : ""}</div></div>`;
+      });
+      html += `</div></details>`;
+    }
+    if (html) panel.innerHTML = html;
+    wrap.appendChild(panel);
+  }
+  $("#messages").appendChild(wrap);
+  $("#messages").scrollTop = $("#messages").scrollHeight;
+  return bubble;
+}
+
+// ---------- SSE 流式解析（fetch + ReadableStream） ----------
+async function streamChat(question) {
+  const aiBubble = addMessage("ai", "", null);
+  let answer = "";
+  let meta = {};
+
+  const resp = await fetch("/api/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, question }),
+  });
+  if (!resp.ok || !resp.body) throw new Error("请求失败 " + resp.status);
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buf = "";
+
+  const onEvent = (event, dataStr) => {
+    const data = JSON.parse(dataStr);
+    if (event === "intent") { meta.intent = data.intent; }
+    else if (event === "delta") { answer += data.text; aiBubble.classList.remove("typing", "empty"); aiBubble.innerHTML = renderMarkdown(answer); $("#messages").scrollTop = $("#messages").scrollHeight; }
+    else if (event === "steps") { meta.steps = data.steps; }
+    else if (event === "done") { meta.citations = data.citations || []; meta.confidence = data.confidence || 0; meta.answer = data.answer; }
+    else if (event === "error") { throw new Error(data.message); }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    // SSE 事件分隔符是 \r\n\r\n（CRLF），统一归一化为 \n\n 再解析
+    buf = buf.replace(/\r\n/g, "\n");
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
+      const lines = raw.split("\n");
+      let ev = "message";
+      const dataLines = [];
+      for (const line of lines) {
+        if (line.startsWith("event:")) ev = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (dataLines.length) onEvent(ev, dataLines.join("\n"));
+    }
+  }
+  // 流结束后处理缓冲区残留（防最后一条事件无结尾分隔符）
+  if (buf.trim()) {
+    const lines = buf.split("\n");
+    let ev = "message";
+    const dataLines = [];
+    for (const line of lines) {
+      if (line.startsWith("event:")) ev = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+    }
+    if (dataLines.length) onEvent(ev, dataLines.join("\n"));
+  }
+  aiBubble.classList.remove("typing");
+  return meta;
+}
+
+// ---------- 提交 ----------
+$("#chat-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("#question").value.trim();
+  if (!q) return;
+  $("#question").value = "";
+  addMessage("user", q, null);
+  $("#send-btn").disabled = true;
+  try {
+    const meta = await streamChat(q);
+    sessionId = sessionId || meta.session_id;
+  } catch (err) {
+    addMessage("ai", "出错了：" + err.message, { intent: "reject" });
+  } finally {
+    $("#send-btn").disabled = false;
+    $("#question").focus();
+  }
+});
+
+// ---------- 初始化：加载模型信息 ----------
+async function loadMeta() {
+  try {
+    const r = await fetch("/api/health");
+    const d = await r.json();
+    $("#model-label").textContent = (d.llm_provider + " / " + d.llm_model);
+    $("#kb-label").textContent = d.kb_chunks ?? "-";
+  } catch { $("#model-label").textContent = "服务未连接"; }
+}
+loadMeta();
+</script>
+</body>
+</html>

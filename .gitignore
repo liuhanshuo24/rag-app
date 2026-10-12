@@ -1,0 +1,13 @@
+# 环境与密钥（禁止提交）
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 向量库（运行时自动重建）
+chroma_db/
+
+# 本地运行时文件
+*.log
